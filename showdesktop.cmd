@@ -1,0 +1,1 @@
+call "%AppData%\Microsoft\Internet Explorer\Quick Launch\Shows Desktop.lnk"

@@ -1,0 +1,2 @@
+powercfg /requests
+powercfg /energy

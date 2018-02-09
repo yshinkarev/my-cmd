@@ -1,0 +1,1 @@
+forfiles.exe /p %temp% /s /m *.* /c "cmd /c del /q /f @file"

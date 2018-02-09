@@ -1,0 +1,1 @@
+start /D %ECLIPSE_HOME% /B eclipse.exe -clean -refresh
