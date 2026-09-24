@@ -1,7 +1,7 @@
 # Run this script in PowerShell after signing in to Windows.
 # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$ConfigureUploadShare, [string]$ErrorLog)
+param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$ConfigureUploadShare, [switch]$ConfigurePower, [string]$ErrorLog)
 
 $ErrorActionPreference = 'Stop'
 
@@ -290,6 +290,74 @@ function Configure-UploadShare {
     Invoke-ElevatedStep -SwitchName 'ConfigureUploadShare' -StepName 'Upload share configuration'
 }
 
+function Get-PowerSettingValues {
+    param([string]$Subgroup, [string]$Setting)
+
+    $output = & powercfg.exe /query SCHEME_CURRENT $Subgroup $Setting 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not read power setting $Setting (exit code: $LASTEXITCODE)."
+    }
+
+    # The last two hexadecimal indices in the query are the AC and DC values.
+    $indices = @([regex]::Matches(($output -join "`n"), '0x[0-9A-Fa-f]{8}') |
+        ForEach-Object { $_.Value })
+    if ($indices.Count -lt 2) {
+        throw "Could not parse power setting $Setting."
+    }
+    return @([Convert]::ToInt32($indices[-2], 16), [Convert]::ToInt32($indices[-1], 16))
+}
+
+function Set-PowerPreferences {
+    if (-not (Test-IsAdministrator)) {
+        throw 'Changing power settings requires administrator rights.'
+    }
+
+    # Powercfg timeout values are in seconds; lid action 0 means Do nothing.
+    $settings = @(
+        @{ Subgroup = 'SUB_BUTTONS'; Name = 'LIDACTION'; AcValue = 0; DcValue = 0 }
+        @{ Subgroup = 'SUB_VIDEO'; Name = 'VIDEOIDLE'; AcValue = 1800; DcValue = 900 }
+        @{ Subgroup = 'SUB_SLEEP'; Name = 'STANDBYIDLE'; AcValue = 7200; DcValue = 1800 }
+        @{ Subgroup = 'SUB_SLEEP'; Name = 'HIBERNATEIDLE'; AcValue = 0; DcValue = 0 }
+    )
+    foreach ($setting in $settings) {
+        & powercfg.exe /setacvalueindex SCHEME_CURRENT $setting.Subgroup $setting.Name $setting.AcValue
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not set AC power setting $($setting.Name) (exit code: $LASTEXITCODE)."
+        }
+        & powercfg.exe /setdcvalueindex SCHEME_CURRENT $setting.Subgroup $setting.Name $setting.DcValue
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not set battery power setting $($setting.Name) (exit code: $LASTEXITCODE)."
+        }
+    }
+    & powercfg.exe /setactive SCHEME_CURRENT
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not activate the updated power plan (exit code: $LASTEXITCODE)."
+    }
+    Write-Host 'Configured lid action, display, sleep and hibernate timeouts for AC and battery.'
+}
+
+function Configure-PowerPreferences {
+    try {
+        $lid = Get-PowerSettingValues -Subgroup 'SUB_BUTTONS' -Setting 'LIDACTION'
+        $display = Get-PowerSettingValues -Subgroup 'SUB_VIDEO' -Setting 'VIDEOIDLE'
+        $sleep = Get-PowerSettingValues -Subgroup 'SUB_SLEEP' -Setting 'STANDBYIDLE'
+        $hibernate = Get-PowerSettingValues -Subgroup 'SUB_SLEEP' -Setting 'HIBERNATEIDLE'
+        if ($lid[0] -eq 0 -and $lid[1] -eq 0 -and
+            $display[0] -eq 1800 -and $display[1] -eq 900 -and
+            $sleep[0] -eq 7200 -and $sleep[1] -eq 1800 -and
+            $hibernate[0] -eq 0 -and $hibernate[1] -eq 0) {
+            Write-Host 'Power preferences are already configured. Skipping.'
+            return
+        }
+    }
+    catch {
+        Write-Host "Could not verify existing power preferences: $($_.Exception.Message)"
+    }
+
+    Write-Host 'Requesting administrator rights to configure power preferences...'
+    Invoke-ElevatedStep -SwitchName 'ConfigurePower' -StepName 'Power configuration'
+}
+
 function Remove-OneDrive {
     if (-not (Test-ProgramInstalled -DisplayNamePattern '^Microsoft OneDrive$')) {
         Write-Host 'Microsoft OneDrive is not installed. Skipping.'
@@ -353,10 +421,11 @@ function Set-PrivatePhysicalNetworks {
     }
 }
 
-if ($ConfigureSystemTemp -or $ConfigureUploadShare -or $ConfigureNetworks) {
+if ($ConfigureSystemTemp -or $ConfigureUploadShare -or $ConfigurePower -or $ConfigureNetworks) {
     try {
         if ($ConfigureSystemTemp) { Set-SystemTemp }
         elseif ($ConfigureUploadShare) { Set-UploadShare }
+        elseif ($ConfigurePower) { Set-PowerPreferences }
         else { Set-PrivatePhysicalNetworks }
         return
     }
@@ -389,12 +458,14 @@ Write-Host 'Step 4: share C:\Upload for guest read and write on private networks
 Configure-UploadShare
 Write-Host 'Step 5: remove Microsoft OneDrive without deleting synced files.'
 Remove-OneDrive
-Write-Host 'Step 6: download and install the latest LibreOffice with an English (US) interface.'
+Write-Host 'Step 6: configure lid action, display, sleep and hibernate timeouts for AC and battery.'
+Configure-PowerPreferences
+Write-Host 'Step 7: download and install the latest LibreOffice with an English (US) interface.'
 Install-LibreOffice
-Write-Host 'Step 7: download and install the latest Firefox in English (US).'
+Write-Host 'Step 8: download and install the latest Firefox in English (US).'
 Install-Firefox
 
-Write-Host 'Step 8: mark currently connected physical networks as private.'
+Write-Host 'Step 9: mark currently connected physical networks as private.'
 $publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
     ForEach-Object { Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
     Where-Object { $_.NetworkCategory -eq 'Public' })
