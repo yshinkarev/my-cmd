@@ -196,29 +196,19 @@ function Set-DefaultEnglishInputMethod {
 
 function Set-TaskbarPreferences {
     $advancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
-    $searchPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
     $current = Get-ItemProperty -Path $advancedPath
-    $search = Get-ItemProperty -Path $searchPath -ErrorAction SilentlyContinue
-
-    if ($current.TaskbarAl -eq 1 -and $current.TaskbarGlomLevel -eq 2 -and
-        $current.ShowTaskViewButton -eq 0 -and $current.TaskbarDa -eq 0 -and
-        $current.IsEnabled -eq 0 -and $search.SearchboxTaskbarMode -eq 0) {
+    if ($current.TaskbarAl -eq 1 -and $current.TaskbarGlomLevel -eq 2) {
         Write-Host 'Taskbar preferences are already configured.'
         return
     }
 
     New-ItemProperty -Path $advancedPath -Name TaskbarAl -PropertyType DWord -Value 1 -Force | Out-Null
     New-ItemProperty -Path $advancedPath -Name TaskbarGlomLevel -PropertyType DWord -Value 2 -Force | Out-Null
-    New-ItemProperty -Path $advancedPath -Name ShowTaskViewButton -PropertyType DWord -Value 0 -Force | Out-Null
-    New-ItemProperty -Path $advancedPath -Name TaskbarDa -PropertyType DWord -Value 0 -Force | Out-Null
-    New-ItemProperty -Path $advancedPath -Name IsEnabled -PropertyType DWord -Value 0 -Force | Out-Null
-    New-Item -Path $searchPath -Force | Out-Null
-    New-ItemProperty -Path $searchPath -Name SearchboxTaskbarMode -PropertyType DWord -Value 0 -Force | Out-Null
 
     # Restart the shell so the new preferences take effect immediately.
     Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
     Start-Process explorer.exe
-    Write-Host 'Centered taskbar icons, separated windows, and hid Search, Task View, Widgets and Resume.'
+    Write-Host 'Centered taskbar icons and disabled window grouping.'
 }
 
 function Set-UploadShare {
@@ -393,7 +383,7 @@ Set-TemporaryDirectory
 Write-Host 'Step 2: choose an existing English keyboard as the default when multiple layouts exist.'
 Set-DefaultEnglishInputMethod
 Write-Host 'To adjust keyboard repeat delay, run: control keyboard'
-Write-Host 'Step 3: configure taskbar alignment, window grouping and visible items.'
+Write-Host 'Step 3: center taskbar icons and keep windows separate.'
 Set-TaskbarPreferences
 Write-Host 'Step 4: share C:\Upload for guest read and write on private networks.'
 Configure-UploadShare
