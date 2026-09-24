@@ -12,17 +12,68 @@ function Test-IsAdministrator {
     )
 }
 
-function Remove-OneDrive {
+function Test-ProgramInstalled {
+    param([string]$DisplayNamePattern)
+
     $uninstallKeys = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
         'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
     )
+    $installed = Get-ItemProperty -Path $uninstallKeys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match $DisplayNamePattern } |
+        Select-Object -First 1
+    return [bool]$installed
+}
 
-    $installed = @(Get-ItemProperty -Path $uninstallKeys -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -eq 'Microsoft OneDrive' })
+function Install-DownloadedProgram {
+    param(
+        [string]$Name,
+        [string]$DownloadUrl,
+        [ValidateSet('Exe', 'Msi')][string]$InstallerKind,
+        [string[]]$InstallerArguments,
+        [int[]]$SuccessExitCodes = @(0)
+    )
 
-    if ($installed.Count -eq 0) {
+    $extension = if ($InstallerKind -eq 'Msi') { '.msi' } else { '.exe' }
+    $installerPath = Join-Path $env:TEMP ("${Name}Setup-$([guid]::NewGuid().ToString('N'))$extension")
+
+    try {
+        Write-Host "Downloading $Name..."
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $installerPath -UseBasicParsing
+
+        $startOptions = @{
+            FilePath = $installerPath
+            ArgumentList = $InstallerArguments
+            Wait = $true
+            PassThru = $true
+        }
+        if ($InstallerKind -eq 'Msi') {
+            Write-Host "Requesting administrator rights to install $Name..."
+            $startOptions.FilePath = 'msiexec.exe'
+            $startOptions.ArgumentList = @('/i', "`"$installerPath`"") + $InstallerArguments
+            $startOptions.Verb = 'RunAs'
+        }
+        else {
+            Write-Host "Installing $Name..."
+        }
+
+        $installer = Start-Process @startOptions
+        if ($installer.ExitCode -notin $SuccessExitCodes) {
+            throw "$Name installation failed (exit code: $($installer.ExitCode))."
+        }
+        Write-Host "$Name installed."
+    }
+    finally {
+        if (Test-Path -LiteralPath $installerPath) {
+            Remove-Item -LiteralPath $installerPath -Force
+            Write-Host "$Name installer removed."
+        }
+    }
+}
+
+function Remove-OneDrive {
+    if (-not (Test-ProgramInstalled -DisplayNamePattern '^Microsoft OneDrive$')) {
         Write-Host 'Microsoft OneDrive is not installed. Skipping.'
         return
     }
@@ -94,16 +145,7 @@ function Set-TaskbarPreferences {
 
 # Step 4: download and install the latest LibreOffice with an English (US) interface.
 function Install-LibreOffice {
-    $uninstallKeys = @(
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )
-    $installed = Get-ItemProperty -Path $uninstallKeys -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -match '^LibreOffice(?:\s+\d|$)' } |
-        Select-Object -First 1
-
-    if ($installed) {
+    if (Test-ProgramInstalled -DisplayNamePattern '^LibreOffice(?:\s+\d|$)') {
         Write-Host 'LibreOffice is already installed. Skipping.'
         return
     }
@@ -118,67 +160,18 @@ function Install-LibreOffice {
         throw 'Could not find the current LibreOffice Windows x64 installer on the official download page.'
     }
 
-    $installerPath = Join-Path $env:TEMP ("LibreOfficeSetup-$([guid]::NewGuid().ToString('N')).msi")
-
-    try {
-        Write-Host 'Downloading the latest LibreOffice...'
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing
-
-        Write-Host 'Requesting administrator rights to install LibreOffice (en-US)...'
-        $installer = Start-Process -FilePath 'msiexec.exe' -Verb RunAs -Wait -PassThru -ArgumentList @(
-            '/i', "`"$installerPath`"", 'UI_LANGS=en_US', '/qn', '/norestart'
-        )
-        if ($installer.ExitCode -notin @(0, 3010)) {
-            throw "LibreOffice installation failed (exit code: $($installer.ExitCode))."
-        }
-
-        Write-Host 'LibreOffice installed.'
-    }
-    finally {
-        if (Test-Path -LiteralPath $installerPath) {
-            Remove-Item -LiteralPath $installerPath -Force
-            Write-Host 'LibreOffice installer removed.'
-        }
-    }
+    Install-DownloadedProgram -Name 'LibreOffice' -DownloadUrl $downloadUrl -InstallerKind Msi -InstallerArguments @('UI_LANGS=en_US', '/qn', '/norestart') -SuccessExitCodes @(0, 3010)
 }
 
 # Step 5: download and install the latest Firefox in English (US).
 function Install-Firefox {
-    $firefoxUninstallKeys = @(
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )
-    $installedFirefox = Get-ItemProperty -Path $firefoxUninstallKeys -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -like 'Mozilla Firefox*' } |
-        Select-Object -First 1
-
-    if ($installedFirefox) {
+    if (Test-ProgramInstalled -DisplayNamePattern '^Mozilla Firefox') {
         Write-Host 'Firefox is already installed. Skipping.'
         return
     }
 
     $downloadUrl = 'https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'
-    $installerPath = Join-Path $env:TEMP ("FirefoxSetup-$([guid]::NewGuid().ToString('N')).exe")
-
-    try {
-        Write-Host 'Downloading the latest Firefox (en-US)...'
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing
-
-        Write-Host 'Installing Firefox...'
-        $installer = Start-Process -FilePath $installerPath -ArgumentList '/S' -Wait -PassThru
-        if ($installer.ExitCode -ne 0) {
-            throw "Firefox installation failed (exit code: $($installer.ExitCode))."
-        }
-
-        Write-Host 'Firefox installed.'
-    }
-    finally {
-        if (Test-Path -LiteralPath $installerPath) {
-            Remove-Item -LiteralPath $installerPath -Force
-            Write-Host 'Firefox installer removed.'
-        }
-    }
+    Install-DownloadedProgram -Name 'Firefox' -DownloadUrl $downloadUrl -InstallerKind Exe -InstallerArguments @('/S')
 }
 
 # Step 6: mark currently connected physical networks as private.
