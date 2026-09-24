@@ -1,7 +1,7 @@
 # Run this script in PowerShell after signing in to Windows.
 # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp)
+param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$ConfigurePublicShare)
 
 $ErrorActionPreference = 'Stop'
 
@@ -186,6 +186,80 @@ function Set-TaskbarPreferences {
     Write-Host 'Centered taskbar icons and disabled window grouping.'
 }
 
+function Set-PublicShare {
+    if (-not (Test-IsAdministrator)) {
+        throw 'Sharing C:\Public requires administrator rights.'
+    }
+
+    $sharePath = 'C:\Public'
+    if (Test-Path -LiteralPath $sharePath -PathType Container) {
+        Write-Host 'C:\Public already exists. Skipping the entire share step.'
+        return
+    }
+    if (Get-SmbShare -Name 'Public' -ErrorAction SilentlyContinue) {
+        throw "The SMB share 'Public' already exists at another location."
+    }
+
+    New-Item -ItemType Directory -Path $sharePath | Out-Null
+    & icacls.exe $sharePath /grant:r '*S-1-1-0:(OI)(CI)M' '*S-1-5-7:(OI)(CI)M' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not set permissions on $sharePath."
+    }
+
+    $everyone = ([Security.Principal.SecurityIdentifier] 'S-1-1-0').Translate([Security.Principal.NTAccount]).Value
+    $anonymous = ([Security.Principal.SecurityIdentifier] 'S-1-5-7').Translate([Security.Principal.NTAccount]).Value
+    New-SmbShare -Name 'Public' -Path $sharePath -ChangeAccess @($everyone, $anonymous) | Out-Null
+
+    # Allow null sessions only for this share; keep any existing exceptions.
+    $serverParameters = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+    $nullSessionShares = @((Get-ItemProperty -Path $serverParameters -Name NullSessionShares -ErrorAction SilentlyContinue).NullSessionShares |
+        Where-Object { $_ })
+    if ('Public' -notin $nullSessionShares) {
+        New-ItemProperty -Path $serverParameters -Name NullSessionShares -PropertyType MultiString `
+            -Value ([string[]]($nullSessionShares + 'Public')) -Force | Out-Null
+    }
+
+    $server = Get-SmbServerConfiguration
+    $serverOptions = @{ AutoShareWorkstation = $false; Force = $true }
+    if ($server.RequireSecuritySignature) {
+        $serverOptions.RequireSecuritySignature = $false
+    }
+    Set-SmbServerConfiguration @serverOptions | Out-Null
+
+    # Removing a share disconnects clients, so leave existing sessions for the next restart.
+    if (@(Get-SmbSession).Count -eq 0) {
+        Get-SmbShare -Special $true |
+            Where-Object { $_.Name -match '^(?:[A-Z]\$|ADMIN\$)$' } |
+            ForEach-Object { Remove-SmbShare -Name $_.Name -Force -Confirm:$false }
+    }
+    else {
+        Write-Host 'Administrative disk shares will close after the next restart (active SMB sessions exist).'
+    }
+
+    if (-not (Get-NetFirewallRule -Name 'my-cmd-public-smb' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name 'my-cmd-public-smb' -DisplayName 'Public SMB (private local subnet)' `
+            -Direction Inbound -Action Allow -Protocol TCP -LocalPort 445 -Profile Private `
+            -RemoteAddress LocalSubnet | Out-Null
+    }
+    Write-Host "Shared C:\Public as \\$env:COMPUTERNAME\Public for anonymous read and write."
+}
+
+function Configure-PublicShare {
+    if (Test-Path -LiteralPath 'C:\Public' -PathType Container) {
+        Write-Host 'C:\Public already exists. Skipping the entire share step.'
+        return
+    }
+
+    Write-Host 'Requesting administrator rights to share C:\Public...'
+    $powerShell = (Get-Process -Id $PID).Path
+    $process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-ConfigurePublicShare'
+    )
+    if ($process.ExitCode -ne 0) {
+        throw "Public share configuration failed (exit code: $($process.ExitCode))."
+    }
+}
+
 function Remove-OneDrive {
     if (-not (Test-ProgramInstalled -DisplayNamePattern '^Microsoft OneDrive$')) {
         Write-Host 'Microsoft OneDrive is not installed. Skipping.'
@@ -254,6 +328,11 @@ if ($ConfigureSystemTemp) {
     return
 }
 
+if ($ConfigurePublicShare) {
+    Set-PublicShare
+    return
+}
+
 if ($ConfigureNetworks) {
     Set-PrivatePhysicalNetworks
     return
@@ -269,14 +348,16 @@ Write-Host 'Step 2: choose an existing English keyboard as the default when mult
 Set-DefaultEnglishInputMethod
 Write-Host 'Step 3: center taskbar icons and keep windows separate.'
 Set-TaskbarPreferences
-Write-Host 'Step 4: remove Microsoft OneDrive without deleting synced files.'
+Write-Host 'Step 4: share C:\Public for guest read and write on private networks.'
+Configure-PublicShare
+Write-Host 'Step 5: remove Microsoft OneDrive without deleting synced files.'
 Remove-OneDrive
-Write-Host 'Step 5: download and install the latest LibreOffice with an English (US) interface.'
+Write-Host 'Step 6: download and install the latest LibreOffice with an English (US) interface.'
 Install-LibreOffice
-Write-Host 'Step 6: download and install the latest Firefox in English (US).'
+Write-Host 'Step 7: download and install the latest Firefox in English (US).'
 Install-Firefox
 
-Write-Host 'Step 7: mark currently connected physical networks as private.'
+Write-Host 'Step 8: mark currently connected physical networks as private.'
 $publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
     ForEach-Object { Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
     Where-Object { $_.NetworkCategory -eq 'Public' })
