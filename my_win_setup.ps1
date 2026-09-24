@@ -1,7 +1,7 @@
 # Run this script in PowerShell after signing in to Windows.
 # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$ConfigurePublicShare)
+param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$ConfigurePublicShare, [string]$ErrorLog)
 
 $ErrorActionPreference = 'Stop'
 
@@ -9,6 +9,37 @@ function Test-IsAdministrator {
     return ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator
     )
+}
+
+function Invoke-ElevatedStep {
+    param(
+        [string]$SwitchName,
+        [string]$StepName
+    )
+
+    $errorLog = Join-Path $env:TEMP ("my_win_setup-$([guid]::NewGuid().ToString('N')).log")
+    $powerShell = (Get-Process -Id $PID).Path
+
+    try {
+        $process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
+            "-$SwitchName", '-ErrorLog', "`"$errorLog`""
+        )
+        if ($process.ExitCode -ne 0) {
+            $details = if (Test-Path -LiteralPath $errorLog) {
+                Get-Content -LiteralPath $errorLog -Raw
+            }
+            else {
+                'The elevated process did not return an error message.'
+            }
+            throw "$StepName failed (exit code: $($process.ExitCode)).`n$details"
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $errorLog) {
+            Remove-Item -LiteralPath $errorLog -Force
+        }
+    }
 }
 
 function Test-ProgramInstalled {
@@ -119,13 +150,7 @@ function Set-TemporaryDirectory {
 
     if ($needsSystemSetup) {
         Write-Host 'Requesting administrator rights to configure C:\TEMP...'
-        $powerShell = (Get-Process -Id $PID).Path
-        $process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-ConfigureSystemTemp'
-        )
-        if ($process.ExitCode -ne 0) {
-            throw "Temporary directory configuration failed (exit code: $($process.ExitCode))."
-        }
+        Invoke-ElevatedStep -SwitchName 'ConfigureSystemTemp' -StepName 'Temporary directory configuration'
     }
 
     foreach ($name in $names) {
@@ -251,13 +276,7 @@ function Configure-PublicShare {
     }
 
     Write-Host 'Requesting administrator rights to share C:\Public...'
-    $powerShell = (Get-Process -Id $PID).Path
-    $process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-ConfigurePublicShare'
-    )
-    if ($process.ExitCode -ne 0) {
-        throw "Public share configuration failed (exit code: $($process.ExitCode))."
-    }
+    Invoke-ElevatedStep -SwitchName 'ConfigurePublicShare' -StepName 'Public share configuration'
 }
 
 function Remove-OneDrive {
@@ -323,19 +342,25 @@ function Set-PrivatePhysicalNetworks {
     }
 }
 
-if ($ConfigureSystemTemp) {
-    Set-SystemTemp
-    return
-}
-
-if ($ConfigurePublicShare) {
-    Set-PublicShare
-    return
-}
-
-if ($ConfigureNetworks) {
-    Set-PrivatePhysicalNetworks
-    return
+if ($ConfigureSystemTemp -or $ConfigurePublicShare -or $ConfigureNetworks) {
+    try {
+        if ($ConfigureSystemTemp) { Set-SystemTemp }
+        elseif ($ConfigurePublicShare) { Set-PublicShare }
+        else { Set-PrivatePhysicalNetworks }
+        return
+    }
+    catch {
+        if ($ErrorLog) {
+            try {
+                $_ | Format-List * -Force | Out-String | Set-Content -LiteralPath $ErrorLog -Encoding UTF8
+            }
+            catch {
+                Write-Host "Could not save the elevated error: $($_.Exception.Message)"
+            }
+        }
+        Write-Host "Elevated step failed: $($_.Exception.Message)"
+        exit 1
+    }
 }
 
 if (Test-IsAdministrator) {
@@ -368,10 +393,4 @@ if ($publicPhysicalNetworks.Count -eq 0) {
 }
 
 Write-Host 'Requesting administrator rights to configure network profiles...'
-$powerShell = (Get-Process -Id $PID).Path
-$process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
-    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-ConfigureNetworks'
-)
-if ($process.ExitCode -ne 0) {
-    throw "Network configuration failed (exit code: $($process.ExitCode))."
-}
+Invoke-ElevatedStep -SwitchName 'ConfigureNetworks' -StepName 'Network configuration'
