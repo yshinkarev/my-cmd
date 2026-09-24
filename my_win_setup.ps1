@@ -382,6 +382,7 @@ Write-Host 'Step 1: use C:\TEMP for Windows and user temporary files.'
 Set-TemporaryDirectory
 Write-Host 'Step 2: choose an existing English keyboard as the default when multiple layouts exist.'
 Set-DefaultEnglishInputMethod
+Write-Host 'To adjust keyboard repeat delay, run: control keyboard'
 Write-Host 'Step 3: center taskbar icons and keep windows separate.'
 Set-TaskbarPreferences
 Write-Host 'Step 4: share C:\Upload for guest read and write on private networks.'
