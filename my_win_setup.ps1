@@ -44,7 +44,6 @@ function Install-DownloadedProgram {
 
         $startOptions = @{
             FilePath = $installerPath
-            ArgumentList = $InstallerArguments
             Wait = $true
             PassThru = $true
         }
@@ -55,6 +54,9 @@ function Install-DownloadedProgram {
             $startOptions.Verb = 'RunAs'
         }
         else {
+            if ($InstallerArguments) {
+                $startOptions.ArgumentList = $InstallerArguments
+            }
             Write-Host "Installing $Name..."
         }
 
@@ -160,7 +162,7 @@ function Install-LibreOffice {
         throw 'Could not find the current LibreOffice Windows x64 installer on the official download page.'
     }
 
-    Install-DownloadedProgram -Name 'LibreOffice' -DownloadUrl $downloadUrl -InstallerKind Msi -InstallerArguments @('UI_LANGS=en_US', '/qn', '/norestart') -SuccessExitCodes @(0, 3010)
+    Install-DownloadedProgram -Name 'LibreOffice' -DownloadUrl $downloadUrl -InstallerKind Msi -InstallerArguments @('UI_LANGS=en_US', '/qf', '/norestart') -SuccessExitCodes @(0, 3010)
 }
 
 # Step 5: download and install the latest Firefox in English (US).
@@ -171,7 +173,7 @@ function Install-Firefox {
     }
 
     $downloadUrl = 'https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'
-    Install-DownloadedProgram -Name 'Firefox' -DownloadUrl $downloadUrl -InstallerKind Exe -InstallerArguments @('/S')
+    Install-DownloadedProgram -Name 'Firefox' -DownloadUrl $downloadUrl -InstallerKind Exe
 }
 
 # Step 6: mark currently connected physical networks as private.
