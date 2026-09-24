@@ -39,7 +39,88 @@ function Remove-OneDrive {
     }
 }
 
-# Step 2: mark currently connected physical networks as private.
+# Step 2: choose an existing English keyboard as the default when multiple layouts exist.
+function Set-DefaultEnglishInputMethod {
+    $languageList = Get-WinUserLanguageList
+    $inputMethods = @( $languageList | ForEach-Object { $_.InputMethodTips } |
+        Where-Object { $_ } | Select-Object -Unique )
+
+    if ($inputMethods.Count -lt 2) {
+        Write-Host 'Only one keyboard layout is configured. Skipping.'
+        return
+    }
+
+    $englishInputTip = $inputMethods | Where-Object {
+        $_ -match '^[0-9A-F]{4}:(?:00000409|00000809)
+# Windows remembers this per network; new networks are not changed by this step.
+function Set-PrivatePhysicalNetworks {
+    if (-not (Test-IsAdministrator)) {
+        throw 'Changing network profiles requires PowerShell to be run as administrator.'
+    }
+
+    $connectedAdapters = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })
+    foreach ($adapter in $connectedAdapters) {
+        $profile = Get-NetConnectionProfile -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue
+        if ($profile -and $profile.NetworkCategory -eq 'Public') {
+            Set-NetConnectionProfile -InterfaceIndex $adapter.ifIndex -NetworkCategory Private
+            Write-Host "Set network '$($profile.Name)' ($($adapter.Name)) to Private."
+        }
+    }
+}
+
+if ($ConfigureNetworks) {
+    Set-PrivatePhysicalNetworks
+    return
+}
+
+if (Test-IsAdministrator) {
+    throw 'Run this script from a regular PowerShell window. Only the network step will request administrator rights.'
+}
+
+Remove-OneDrive
+Set-DefaultEnglishInputMethod
+
+$publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
+    ForEach-Object { Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
+    Where-Object { $_.NetworkCategory -eq 'Public' })
+
+if ($publicPhysicalNetworks.Count -eq 0) {
+    Write-Host 'No connected public physical networks. Skipping.'
+    return
+}
+
+Write-Host 'Requesting administrator rights to configure network profiles...'
+$powerShell = (Get-Process -Id $PID).Path
+$process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-ConfigureNetworks'
+)
+if ($process.ExitCode -ne 0) {
+    throw "Network configuration failed (exit code: $($process.ExitCode))."
+}
+
+    } | Select-Object -First 1
+
+    if (-not $englishInputTip) {
+        $englishInputTip = $languageList | Where-Object { $_.LanguageTag -match '^en(-|$)' } |
+            ForEach-Object { $_.InputMethodTips } | Select-Object -First 1
+    }
+
+    if (-not $englishInputTip) {
+        Write-Host 'No English keyboard layout is configured. Skipping.'
+        return
+    }
+
+    $current = Get-WinDefaultInputMethodOverride
+    if ($current -and $current.InputMethodTip -eq $englishInputTip) {
+        Write-Host 'English is already the default keyboard layout.'
+        return
+    }
+
+    Set-WinDefaultInputMethodOverride -InputTip $englishInputTip
+    Write-Host "Set English keyboard layout ($englishInputTip) as default."
+}
+
+# Step 3: mark currently connected physical networks as private.
 # Windows remembers this per network; new networks are not changed by this step.
 function Set-PrivatePhysicalNetworks {
     if (-not (Test-IsAdministrator)) {
