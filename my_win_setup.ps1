@@ -5,6 +5,15 @@ param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$Configu
 
 $ErrorActionPreference = 'Stop'
 
+function Write-Step {
+    param([int]$Number, [string]$Description)
+
+    if ($Number -gt 1) {
+        Write-Host ''
+    }
+    Write-Host "Step ${Number}: $Description"
+}
+
 function Test-IsAdministrator {
     return ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator
@@ -293,7 +302,7 @@ function Configure-UploadShare {
 function Get-PowerSettingValues {
     param([string]$Subgroup, [string]$Setting)
 
-    $output = & powercfg.exe /query SCHEME_CURRENT $Subgroup $Setting 2>&1
+    $output = & powercfg.exe /qh SCHEME_CURRENT $Subgroup $Setting 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Could not read power setting $Setting (exit code: $LASTEXITCODE)."
     }
@@ -349,6 +358,7 @@ function Configure-PowerPreferences {
             Write-Host 'Power preferences are already configured. Skipping.'
             return
         }
+        Write-Host "Current power settings (AC/battery): lid $($lid -join '/'), display $($display -join '/'), sleep $($sleep -join '/'), hibernate $($hibernate -join '/')."
     }
     catch {
         Write-Host "Could not verify existing power preferences: $($_.Exception.Message)"
@@ -447,25 +457,25 @@ if (Test-IsAdministrator) {
     throw 'Run this script from a regular PowerShell window. Steps requiring administrator rights will request them.'
 }
 
-Write-Host 'Step 1: use C:\TEMP for Windows and user temporary files.'
+Write-Step -Number 1 -Description 'use C:\TEMP for Windows and user temporary files.'
 Set-TemporaryDirectory
-Write-Host 'Step 2: choose an existing English keyboard as the default when multiple layouts exist.'
+Write-Step -Number 2 -Description 'choose an existing English keyboard as the default when multiple layouts exist.'
 Set-DefaultEnglishInputMethod
 Write-Host 'To adjust keyboard repeat delay, run: control keyboard'
-Write-Host 'Step 3: center taskbar icons and keep windows separate.'
+Write-Step -Number 3 -Description 'center taskbar icons and keep windows separate.'
 Set-TaskbarPreferences
-Write-Host 'Step 4: share C:\Upload for guest read and write on private networks.'
+Write-Step -Number 4 -Description 'share C:\Upload for guest read and write on private networks.'
 Configure-UploadShare
-Write-Host 'Step 5: remove Microsoft OneDrive without deleting synced files.'
+Write-Step -Number 5 -Description 'remove Microsoft OneDrive without deleting synced files.'
 Remove-OneDrive
-Write-Host 'Step 6: configure lid action, display, sleep and hibernate timeouts for AC and battery.'
+Write-Step -Number 6 -Description 'configure lid action, display, sleep and hibernate timeouts for AC and battery.'
 Configure-PowerPreferences
-Write-Host 'Step 7: download and install the latest LibreOffice with an English (US) interface.'
+Write-Step -Number 7 -Description 'download and install the latest LibreOffice with an English (US) interface.'
 Install-LibreOffice
-Write-Host 'Step 8: download and install the latest Firefox in English (US).'
+Write-Step -Number 8 -Description 'download and install the latest Firefox in English (US).'
 Install-Firefox
 
-Write-Host 'Step 9: mark currently connected physical networks as private.'
+Write-Step -Number 9 -Description 'mark currently connected physical networks as private.'
 $publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
     ForEach-Object { Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
     Where-Object { $_.NetworkCategory -eq 'Public' })
