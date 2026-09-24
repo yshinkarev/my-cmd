@@ -2,7 +2,15 @@
 # Step 1: remove Microsoft OneDrive without deleting synced files.
 # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
+param([switch]$ConfigureNetworks)
+
 $ErrorActionPreference = 'Stop'
+
+function Test-IsAdministrator {
+    return ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+}
 
 function Remove-OneDrive {
     $uninstallKeys = @(
@@ -31,15 +39,10 @@ function Remove-OneDrive {
     }
 }
 
-Remove-OneDrive
-
 # Step 2: mark currently connected physical networks as private.
 # Windows remembers this per network; new networks are not changed by this step.
 function Set-PrivatePhysicalNetworks {
-    $isAdministrator = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator
-    )
-    if (-not $isAdministrator) {
+    if (-not (Test-IsAdministrator)) {
         throw 'Changing network profiles requires PowerShell to be run as administrator.'
     }
 
@@ -53,4 +56,31 @@ function Set-PrivatePhysicalNetworks {
     }
 }
 
-Set-PrivatePhysicalNetworks
+if ($ConfigureNetworks) {
+    Set-PrivatePhysicalNetworks
+    return
+}
+
+if (Test-IsAdministrator) {
+    throw 'Run this script from a regular PowerShell window. Only the network step will request administrator rights.'
+}
+
+Remove-OneDrive
+
+$publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
+    ForEach-Object { Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
+    Where-Object { $_.NetworkCategory -eq 'Public' })
+
+if ($publicPhysicalNetworks.Count -eq 0) {
+    Write-Host 'No connected public physical networks. Skipping.'
+    return
+}
+
+Write-Host 'Requesting administrator rights to configure network profiles...'
+$powerShell = (Get-Process -Id $PID).Path
+$process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-ConfigureNetworks'
+)
+if ($process.ExitCode -ne 0) {
+    throw "Network configuration failed (exit code: $($process.ExitCode))."
+}
