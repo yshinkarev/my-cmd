@@ -1,8 +1,7 @@
 # Run this script in PowerShell after signing in to Windows.
-# Step 1: remove Microsoft OneDrive without deleting synced files.
 # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-param([switch]$ConfigureNetworks)
+param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp)
 
 $ErrorActionPreference = 'Stop'
 
@@ -74,25 +73,55 @@ function Install-DownloadedProgram {
     }
 }
 
-function Remove-OneDrive {
-    if (-not (Test-ProgramInstalled -DisplayNamePattern '^Microsoft OneDrive$')) {
-        Write-Host 'Microsoft OneDrive is not installed. Skipping.'
-        return
+function Set-SystemTemp {
+    if (-not (Test-IsAdministrator)) {
+        throw 'Configuring system temporary files requires administrator rights.'
     }
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw 'WinGet is unavailable. Sign in to Windows, update App Installer, then retry.'
-    }
+    $tempDirectory = 'C:\TEMP'
+    New-Item -ItemType Directory -Path $tempDirectory -Force | Out-Null
 
-    Write-Host 'Uninstalling Microsoft OneDrive...'
-    & winget uninstall --id Microsoft.OneDrive --exact --accept-source-agreements
-
+    # The machine-wide temporary directory must be writable by regular users.
+    & icacls.exe $tempDirectory /grant:r '*S-1-5-32-545:(OI)(CI)M' | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "OneDrive uninstall failed (WinGet exit code: $LASTEXITCODE)."
+        throw "Could not set permissions on $tempDirectory."
     }
+
+    foreach ($name in @('TEMP', 'TMP', 'TMPDIR')) {
+        [Environment]::SetEnvironmentVariable($name, $tempDirectory, 'Machine')
+    }
+    Write-Host "Configured system temporary variables to $tempDirectory."
 }
 
-# Step 2: choose an existing English keyboard as the default when multiple layouts exist.
+function Set-TemporaryDirectory {
+    $tempDirectory = 'C:\TEMP'
+    $names = @('TEMP', 'TMP', 'TMPDIR')
+    $needsSystemSetup = -not (Test-Path -LiteralPath $tempDirectory -PathType Container)
+
+    foreach ($name in $names) {
+        if ([Environment]::GetEnvironmentVariable($name, 'Machine') -ne $tempDirectory) {
+            $needsSystemSetup = $true
+        }
+    }
+
+    if ($needsSystemSetup) {
+        Write-Host 'Requesting administrator rights to configure C:\TEMP...'
+        $powerShell = (Get-Process -Id $PID).Path
+        $process = Start-Process -FilePath $powerShell -Verb RunAs -Wait -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-ConfigureSystemTemp'
+        )
+        if ($process.ExitCode -ne 0) {
+            throw "Temporary directory configuration failed (exit code: $($process.ExitCode))."
+        }
+    }
+
+    foreach ($name in $names) {
+        [Environment]::SetEnvironmentVariable($name, $tempDirectory, 'User')
+        [Environment]::SetEnvironmentVariable($name, $tempDirectory, 'Process')
+    }
+    Write-Host "Using $tempDirectory for temporary files."
+}
+
 function Set-DefaultEnglishInputMethod {
     $languageList = Get-WinUserLanguageList
     $inputMethods = @( $languageList | ForEach-Object { $_.InputMethodTips } |
@@ -127,7 +156,6 @@ function Set-DefaultEnglishInputMethod {
     Write-Host "Set English keyboard layout ($englishInputTip) as default."
 }
 
-# Step 3: center taskbar icons and keep windows separate.
 function Set-TaskbarPreferences {
     $advancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
     $current = Get-ItemProperty -Path $advancedPath
@@ -145,7 +173,24 @@ function Set-TaskbarPreferences {
     Write-Host 'Centered taskbar icons and disabled window grouping.'
 }
 
-# Step 4: download and install the latest LibreOffice with an English (US) interface.
+function Remove-OneDrive {
+    if (-not (Test-ProgramInstalled -DisplayNamePattern '^Microsoft OneDrive$')) {
+        Write-Host 'Microsoft OneDrive is not installed. Skipping.'
+        return
+    }
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw 'WinGet is unavailable. Sign in to Windows, update App Installer, then retry.'
+    }
+
+    Write-Host 'Uninstalling Microsoft OneDrive...'
+    & winget uninstall --id Microsoft.OneDrive --exact --accept-source-agreements
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "OneDrive uninstall failed (WinGet exit code: $LASTEXITCODE)."
+    }
+}
+
 function Install-LibreOffice {
     if (Test-ProgramInstalled -DisplayNamePattern '^LibreOffice(?:\s+\d|$)') {
         Write-Host 'LibreOffice is already installed. Skipping.'
@@ -165,7 +210,6 @@ function Install-LibreOffice {
     Install-DownloadedProgram -Name 'LibreOffice' -DownloadUrl $downloadUrl -InstallerKind Msi -InstallerArguments @('UI_LANGS=en_US', '/qf', '/norestart') -SuccessExitCodes @(0, 3010)
 }
 
-# Step 5: download and install the latest Firefox in English (US).
 function Install-Firefox {
     if (Test-ProgramInstalled -DisplayNamePattern '^Mozilla Firefox') {
         Write-Host 'Firefox is already installed. Skipping.'
@@ -176,7 +220,6 @@ function Install-Firefox {
     Install-DownloadedProgram -Name 'Firefox' -DownloadUrl $downloadUrl -InstallerKind Exe
 }
 
-# Step 6: mark currently connected physical networks as private.
 # Windows remembers this per network; new networks are not changed by this step.
 function Set-PrivatePhysicalNetworks {
     if (-not (Test-IsAdministrator)) {
@@ -193,21 +236,34 @@ function Set-PrivatePhysicalNetworks {
     }
 }
 
+if ($ConfigureSystemTemp) {
+    Set-SystemTemp
+    return
+}
+
 if ($ConfigureNetworks) {
     Set-PrivatePhysicalNetworks
     return
 }
 
 if (Test-IsAdministrator) {
-    throw 'Run this script from a regular PowerShell window. Only the network step will request administrator rights.'
+    throw 'Run this script from a regular PowerShell window. Steps requiring administrator rights will request them.'
 }
 
-Remove-OneDrive
+Write-Host 'Step 1: use C:\TEMP for Windows and user temporary files.'
+Set-TemporaryDirectory
+Write-Host 'Step 2: choose an existing English keyboard as the default when multiple layouts exist.'
 Set-DefaultEnglishInputMethod
+Write-Host 'Step 3: center taskbar icons and keep windows separate.'
 Set-TaskbarPreferences
+Write-Host 'Step 4: remove Microsoft OneDrive without deleting synced files.'
+Remove-OneDrive
+Write-Host 'Step 5: download and install the latest LibreOffice with an English (US) interface.'
 Install-LibreOffice
+Write-Host 'Step 6: download and install the latest Firefox in English (US).'
 Install-Firefox
 
+Write-Host 'Step 7: mark currently connected physical networks as private.'
 $publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
     ForEach-Object { Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
     Where-Object { $_.NetworkCategory -eq 'Public' })
