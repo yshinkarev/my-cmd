@@ -74,7 +74,32 @@ function Set-DefaultEnglishInputMethod {
     Write-Host "Set English keyboard layout ($englishInputTip) as default."
 }
 
-# Step 3: mark currently connected physical networks as private.
+# Step 3: download and install the latest Firefox in English (US).
+function Install-Firefox {
+    $downloadUrl = 'https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'
+    $installerPath = Join-Path $env:TEMP ("FirefoxSetup-$([guid]::NewGuid().ToString('N')).exe")
+
+    try {
+        Write-Host 'Downloading the latest Firefox (en-US)...'
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing
+
+        Write-Host 'Installing Firefox...'
+        $installer = Start-Process -FilePath $installerPath -ArgumentList '/S' -Wait -PassThru
+        if ($installer.ExitCode -ne 0) {
+            throw "Firefox installation failed (exit code: $($installer.ExitCode))."
+        }
+
+        Write-Host 'Firefox installed.'
+    }
+    finally {
+        if (Test-Path -LiteralPath $installerPath) {
+            Remove-Item -LiteralPath $installerPath -Force
+            Write-Host 'Firefox installer removed.'
+        }
+    }
+}
+
+# Step 4: mark currently connected physical networks as private.
 # Windows remembers this per network; new networks are not changed by this step.
 function Set-PrivatePhysicalNetworks {
     if (-not (Test-IsAdministrator)) {
@@ -102,6 +127,7 @@ if (Test-IsAdministrator) {
 
 Remove-OneDrive
 Set-DefaultEnglishInputMethod
+Install-Firefox
 
 $publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
     ForEach-Object { Get-NetConnectionProfile -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
