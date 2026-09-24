@@ -97,11 +97,24 @@ function Set-TemporaryDirectory {
     $tempDirectory = 'C:\TEMP'
     $names = @('TEMP', 'TMP', 'TMPDIR')
     $needsSystemSetup = -not (Test-Path -LiteralPath $tempDirectory -PathType Container)
+    $needsUserSetup = $false
+    $needsProcessSetup = $false
 
     foreach ($name in $names) {
         if ([Environment]::GetEnvironmentVariable($name, 'Machine') -ne $tempDirectory) {
             $needsSystemSetup = $true
         }
+        if ([Environment]::GetEnvironmentVariable($name, 'User') -ne $tempDirectory) {
+            $needsUserSetup = $true
+        }
+        if ([Environment]::GetEnvironmentVariable($name, 'Process') -ne $tempDirectory) {
+            $needsProcessSetup = $true
+        }
+    }
+
+    if (-not ($needsSystemSetup -or $needsUserSetup -or $needsProcessSetup)) {
+        Write-Host 'C:\TEMP is already configured for system, user and current session. Skipping.'
+        return
     }
 
     if ($needsSystemSetup) {
