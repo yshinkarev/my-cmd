@@ -1,7 +1,7 @@
 # Run this script in PowerShell after signing in to Windows.
 # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$ConfigurePublicShare, [string]$ErrorLog)
+param([switch]$ConfigureNetworks, [switch]$ConfigureSystemTemp, [switch]$ConfigureUploadShare, [string]$ErrorLog)
 
 $ErrorActionPreference = 'Stop'
 
@@ -211,29 +211,29 @@ function Set-TaskbarPreferences {
     Write-Host 'Centered taskbar icons and disabled window grouping.'
 }
 
-function Set-PublicShare {
+function Set-UploadShare {
     if (-not (Test-IsAdministrator)) {
-        throw 'Sharing C:\Public requires administrator rights.'
+        throw 'Sharing C:\Upload requires administrator rights.'
     }
 
-    $sharePath = 'C:\Public'
+    $sharePath = 'C:\Upload'
     if (Test-Path -LiteralPath $sharePath -PathType Container) {
-        Write-Host 'C:\Public already exists. Skipping the entire share step.'
+        Write-Host 'C:\Upload already exists. Skipping the entire share step.'
         return
     }
-    $existingShare = Get-SmbShare -Name 'Public' -ErrorAction SilentlyContinue
+    $existingShare = Get-SmbShare -Name 'Upload' -ErrorAction SilentlyContinue
     if ($existingShare) {
         $existingPath = [IO.Path]::GetFullPath($existingShare.Path).TrimEnd('\')
-        $defaultPublicPath = [IO.Path]::GetFullPath($env:PUBLIC).TrimEnd('\')
-        if ($existingPath -ine $defaultPublicPath) {
-            throw "The SMB share 'Public' already points to '$($existingShare.Path)'. Resolve this share before setting up C:\Public."
+        $uploadPath = [IO.Path]::GetFullPath($sharePath).TrimEnd('\')
+        if ($existingPath -ine $uploadPath) {
+            throw "The SMB share 'Upload' already points to '$($existingShare.Path)'. Resolve this share before setting up C:\Upload."
         }
         if (@(Get-SmbSession).Count -ne 0) {
-            throw "The default Public share at '$($existingShare.Path)' has active SMB sessions. Close them and retry."
+            throw "The stale Upload share has active SMB sessions. Close them and retry."
         }
 
-        Remove-SmbShare -Name 'Public' -Force -Confirm:$false
-        Write-Host "Removed the existing Public share at '$($existingShare.Path)'."
+        Remove-SmbShare -Name 'Upload' -Force -Confirm:$false
+        Write-Host 'Removed the stale Upload share before creating the folder.'
     }
 
     New-Item -ItemType Directory -Path $sharePath | Out-Null
@@ -244,15 +244,15 @@ function Set-PublicShare {
 
     $everyone = ([Security.Principal.SecurityIdentifier] 'S-1-1-0').Translate([Security.Principal.NTAccount]).Value
     $anonymous = ([Security.Principal.SecurityIdentifier] 'S-1-5-7').Translate([Security.Principal.NTAccount]).Value
-    New-SmbShare -Name 'Public' -Path $sharePath -ChangeAccess @($everyone, $anonymous) | Out-Null
+    New-SmbShare -Name 'Upload' -Path $sharePath -ChangeAccess @($everyone, $anonymous) | Out-Null
 
     # Allow null sessions only for this share; keep any existing exceptions.
     $serverParameters = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
     $nullSessionShares = @((Get-ItemProperty -Path $serverParameters -Name NullSessionShares -ErrorAction SilentlyContinue).NullSessionShares |
         Where-Object { $_ })
-    if ('Public' -notin $nullSessionShares) {
+    if ('Upload' -notin $nullSessionShares) {
         New-ItemProperty -Path $serverParameters -Name NullSessionShares -PropertyType MultiString `
-            -Value ([string[]]($nullSessionShares + 'Public')) -Force | Out-Null
+            -Value ([string[]]($nullSessionShares + 'Upload')) -Force | Out-Null
     }
 
     $server = Get-SmbServerConfiguration
@@ -272,22 +272,22 @@ function Set-PublicShare {
         Write-Host 'Administrative disk shares will close after the next restart (active SMB sessions exist).'
     }
 
-    if (-not (Get-NetFirewallRule -Name 'my-cmd-public-smb' -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -Name 'my-cmd-public-smb' -DisplayName 'Public SMB (private local subnet)' `
+    if (-not (Get-NetFirewallRule -Name 'my-cmd-upload-smb' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name 'my-cmd-upload-smb' -DisplayName 'Upload SMB (private local subnet)' `
             -Direction Inbound -Action Allow -Protocol TCP -LocalPort 445 -Profile Private `
             -RemoteAddress LocalSubnet | Out-Null
     }
-    Write-Host "Shared C:\Public as \\$env:COMPUTERNAME\Public for anonymous read and write."
+    Write-Host "Shared C:\Upload as \\$env:COMPUTERNAME\Upload for anonymous read and write."
 }
 
-function Configure-PublicShare {
-    if (Test-Path -LiteralPath 'C:\Public' -PathType Container) {
-        Write-Host 'C:\Public already exists. Skipping the entire share step.'
+function Configure-UploadShare {
+    if (Test-Path -LiteralPath 'C:\Upload' -PathType Container) {
+        Write-Host 'C:\Upload already exists. Skipping the entire share step.'
         return
     }
 
-    Write-Host 'Requesting administrator rights to share C:\Public...'
-    Invoke-ElevatedStep -SwitchName 'ConfigurePublicShare' -StepName 'Public share configuration'
+    Write-Host 'Requesting administrator rights to share C:\Upload...'
+    Invoke-ElevatedStep -SwitchName 'ConfigureUploadShare' -StepName 'Upload share configuration'
 }
 
 function Remove-OneDrive {
@@ -353,10 +353,10 @@ function Set-PrivatePhysicalNetworks {
     }
 }
 
-if ($ConfigureSystemTemp -or $ConfigurePublicShare -or $ConfigureNetworks) {
+if ($ConfigureSystemTemp -or $ConfigureUploadShare -or $ConfigureNetworks) {
     try {
         if ($ConfigureSystemTemp) { Set-SystemTemp }
-        elseif ($ConfigurePublicShare) { Set-PublicShare }
+        elseif ($ConfigureUploadShare) { Set-UploadShare }
         else { Set-PrivatePhysicalNetworks }
         return
     }
@@ -384,8 +384,8 @@ Write-Host 'Step 2: choose an existing English keyboard as the default when mult
 Set-DefaultEnglishInputMethod
 Write-Host 'Step 3: center taskbar icons and keep windows separate.'
 Set-TaskbarPreferences
-Write-Host 'Step 4: share C:\Public for guest read and write on private networks.'
-Configure-PublicShare
+Write-Host 'Step 4: share C:\Upload for guest read and write on private networks.'
+Configure-UploadShare
 Write-Host 'Step 5: remove Microsoft OneDrive without deleting synced files.'
 Remove-OneDrive
 Write-Host 'Step 6: download and install the latest LibreOffice with an English (US) interface.'
