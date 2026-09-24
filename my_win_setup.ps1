@@ -221,8 +221,19 @@ function Set-PublicShare {
         Write-Host 'C:\Public already exists. Skipping the entire share step.'
         return
     }
-    if (Get-SmbShare -Name 'Public' -ErrorAction SilentlyContinue) {
-        throw "The SMB share 'Public' already exists at another location."
+    $existingShare = Get-SmbShare -Name 'Public' -ErrorAction SilentlyContinue
+    if ($existingShare) {
+        $existingPath = [IO.Path]::GetFullPath($existingShare.Path).TrimEnd('\')
+        $defaultPublicPath = [IO.Path]::GetFullPath($env:PUBLIC).TrimEnd('\')
+        if ($existingPath -ine $defaultPublicPath) {
+            throw "The SMB share 'Public' already points to '$($existingShare.Path)'. Resolve this share before setting up C:\Public."
+        }
+        if (@(Get-SmbSession).Count -ne 0) {
+            throw "The default Public share at '$($existingShare.Path)' has active SMB sessions. Close them and retry."
+        }
+
+        Remove-SmbShare -Name 'Public' -Force -Confirm:$false
+        Write-Host "Removed the existing Public share at '$($existingShare.Path)'."
     }
 
     New-Item -ItemType Directory -Path $sharePath | Out-Null
