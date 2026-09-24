@@ -94,6 +94,20 @@ function Set-TaskbarPreferences {
 
 # Step 4: download and install the latest Firefox in English (US).
 function Install-Firefox {
+    $firefoxUninstallKeys = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $installedFirefox = Get-ItemProperty -Path $firefoxUninstallKeys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like 'Mozilla Firefox*' } |
+        Select-Object -First 1
+
+    if ($installedFirefox) {
+        Write-Host 'Firefox is already installed. Skipping.'
+        return
+    }
+
     $downloadUrl = 'https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'
     $installerPath = Join-Path $env:TEMP ("FirefoxSetup-$([guid]::NewGuid().ToString('N')).exe")
 
