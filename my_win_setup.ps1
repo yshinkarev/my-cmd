@@ -92,7 +92,57 @@ function Set-TaskbarPreferences {
     Write-Host 'Centered taskbar icons and disabled window grouping.'
 }
 
-# Step 4: download and install the latest Firefox in English (US).
+# Step 4: download and install the latest LibreOffice with an English (US) interface.
+function Install-LibreOffice {
+    $uninstallKeys = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $installed = Get-ItemProperty -Path $uninstallKeys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match '^LibreOffice(?:\s+\d|$)' } |
+        Select-Object -First 1
+
+    if ($installed) {
+        Write-Host 'LibreOffice is already installed. Skipping.'
+        return
+    }
+
+    $downloadPage = Invoke-WebRequest -Uri 'https://www.libreoffice.org/download/' -UseBasicParsing
+    $downloadUrl = $downloadPage.Links |
+        Where-Object {
+            $_.href -match '^https://download\.documentfoundation\.org/libreoffice/stable/\d+(?:\.\d)+/win/x86_64/LibreOffice_[^/]+_Win_x86-64\.msi$'
+        } | Select-Object -First 1 -ExpandProperty href
+
+    if (-not $downloadUrl) {
+        throw 'Could not find the current LibreOffice Windows x64 installer on the official download page.'
+    }
+
+    $installerPath = Join-Path $env:TEMP ("LibreOfficeSetup-$([guid]::NewGuid().ToString('N')).msi")
+
+    try {
+        Write-Host 'Downloading the latest LibreOffice...'
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing
+
+        Write-Host 'Requesting administrator rights to install LibreOffice (en-US)...'
+        $installer = Start-Process -FilePath 'msiexec.exe' -Verb RunAs -Wait -PassThru -ArgumentList @(
+            '/i', "`"$installerPath`"", 'UI_LANGS=en_US', '/qn', '/norestart'
+        )
+        if ($installer.ExitCode -notin @(0, 3010)) {
+            throw "LibreOffice installation failed (exit code: $($installer.ExitCode))."
+        }
+
+        Write-Host 'LibreOffice installed.'
+    }
+    finally {
+        if (Test-Path -LiteralPath $installerPath) {
+            Remove-Item -LiteralPath $installerPath -Force
+            Write-Host 'LibreOffice installer removed.'
+        }
+    }
+}
+
+# Step 5: download and install the latest Firefox in English (US).
 function Install-Firefox {
     $firefoxUninstallKeys = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
@@ -131,7 +181,7 @@ function Install-Firefox {
     }
 }
 
-# Step 5: mark currently connected physical networks as private.
+# Step 6: mark currently connected physical networks as private.
 # Windows remembers this per network; new networks are not changed by this step.
 function Set-PrivatePhysicalNetworks {
     if (-not (Test-IsAdministrator)) {
@@ -160,6 +210,7 @@ if (Test-IsAdministrator) {
 Remove-OneDrive
 Set-DefaultEnglishInputMethod
 Set-TaskbarPreferences
+Install-LibreOffice
 Install-Firefox
 
 $publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
