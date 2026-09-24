@@ -74,7 +74,25 @@ function Set-DefaultEnglishInputMethod {
     Write-Host "Set English keyboard layout ($englishInputTip) as default."
 }
 
-# Step 3: download and install the latest Firefox in English (US).
+# Step 3: center taskbar icons and keep windows separate.
+function Set-TaskbarPreferences {
+    $advancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    $current = Get-ItemProperty -Path $advancedPath
+    if ($current.TaskbarAl -eq 1 -and $current.TaskbarGlomLevel -eq 2) {
+        Write-Host 'Taskbar preferences are already configured.'
+        return
+    }
+
+    New-ItemProperty -Path $advancedPath -Name TaskbarAl -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -Path $advancedPath -Name TaskbarGlomLevel -PropertyType DWord -Value 2 -Force | Out-Null
+
+    # Restart the shell so the new preferences take effect immediately.
+    Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+    Start-Process explorer.exe
+    Write-Host 'Centered taskbar icons and disabled window grouping.'
+}
+
+# Step 4: download and install the latest Firefox in English (US).
 function Install-Firefox {
     $downloadUrl = 'https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'
     $installerPath = Join-Path $env:TEMP ("FirefoxSetup-$([guid]::NewGuid().ToString('N')).exe")
@@ -99,7 +117,7 @@ function Install-Firefox {
     }
 }
 
-# Step 4: mark currently connected physical networks as private.
+# Step 5: mark currently connected physical networks as private.
 # Windows remembers this per network; new networks are not changed by this step.
 function Set-PrivatePhysicalNetworks {
     if (-not (Test-IsAdministrator)) {
@@ -127,6 +145,7 @@ if (Test-IsAdministrator) {
 
 Remove-OneDrive
 Set-DefaultEnglishInputMethod
+Set-TaskbarPreferences
 Install-Firefox
 
 $publicPhysicalNetworks = @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } |
